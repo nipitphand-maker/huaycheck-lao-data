@@ -1,0 +1,41 @@
+name: Scrape Lao Pattana results
+
+on:
+  schedule:
+    # หวยลาวพัฒนา draws Mon–Fri ~20:30 ICT (UTC+7). 13:30 UTC = 20:30 Thai;
+    # 15:00 UTC lag run as a safety net.
+    - cron: "30 13 * * 1-5"
+    - cron: "0 15 * * 1-5"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Scrape
+        run: python scrape.py
+      - name: Commit if changed
+        run: |
+          git config user.name "lao-bot"
+          git config user.email "bot@users.noreply.github.com"
+          if [ -n "$(git status --porcelain data/lao.json)" ]; then
+            git add data/lao.json
+            git commit -m "data: lao results $(date -u +%Y-%m-%dT%H:%MZ)"
+            git pull --rebase --autostash origin main
+            git push
+          else
+            echo "No change."
+          fi
