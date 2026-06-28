@@ -1,5 +1,5 @@
 {
- "generatedAt": "2026-06-26T16:56:42Z",
+ "generatedAt": "2026-06-28T17:12:56Z",
  "draws": {
   "lao_pattana": {
    "date": "2026-06-26",
@@ -9,5 +9,57 @@
    "animal": "ตัวนิ่ม",
    "verified": true
   }
+ },
+ "history": {
+  "lao_pattana": [
+   {
+    "date": "2026-06-26",
+    "num4": "1577",
+    "top3": "577",
+    "top2": "77",
+    "animal": "ตัวนิ่ม",
+    "verified": true
+   },
+   {
+    "date": "2026-06-25",
+    "num4": "9179",
+    "top3": "179",
+    "top2": "79",
+    "animal": "ปู",
+    "verified": true
+   },
+   {
+    "date": "2026-06-24",
+    "num4": "8102",
+    "top3": "102",
+    "top2": "02",
+    "animal": "หอย",
+    "verified": true
+   },
+   {
+    "date": "2026-06-23",
+    "num4": "5721",
+    "top3": "721",
+    "top2": "21",
+    "animal": "นกนางแอ่น",
+    "verified": true
+   },
+   {
+    "date": "2026-06-22",
+    "num4": "3818",
+    "top3": "818",
+    "top2": "18",
+    "animal": "แมวป่า",
+    "verified": true
+   },
+   {
+    "date": "2026-06-19",
+    "num4": "4240",
+    "top3": "240",
+    "top2": "40",
+    "animal": "อินทรี",
+    "verified": true
+   }
+  ]
  }
 }

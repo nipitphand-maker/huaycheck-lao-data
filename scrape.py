@@ -3,23 +3,33 @@
 HuayCheck Lao data bot — scrapes หวยลาวพัฒนา (Lao Pattana) results from Sanook
 and publishes a clean JSON the HuayCheck app reads (mirrors the Hanoi bot).
 
-Source (verified 2026-06-23):
+Source (verified 2026-06-28):
   - https://www.sanook.com/news/laolotto/  : Next.js page; results live in the
-    embedded <script id="__NEXT_DATA__"> Apollo cache (recentLaoLotto +
-    laoLottoes), NOT in the rendered DOM. We parse the JSON, not the HTML.
+    embedded <script id="__NEXT_DATA__"> Apollo cache, NOT the rendered DOM:
+      * $ROOT_QUERY.recentLaoLotto                 -> the latest draw
+      * $ROOT_QUERY.laoLottoes({"first":6}).edges  -> the last ~6 draws
+    Each node has dateSlug ("ddmmYYYY" Buddhist era) + a prizeResult ref whose
+    object holds last4Prize / last3Prize1 / last3Prize2 / animalName.
 
-Output shape (matches the app's LaoDraw in lib/foreignFetch.ts):
+Output shape (matches the app's LaoData in lib/foreignFetch.ts):
   { "generatedAt": "...Z",
-    "draws": { "lao_pattana": { "date": "YYYY-MM-DD",  # AD, not Buddhist era
-                                "num4": "3818", "top3": "818", "top2": "18",
-                                "animal": "แมวป่า", "verified": true } } }
+    "draws":   { "lao_pattana": { ...latest draw... } },
+    "history": { "lao_pattana": [ {newest}, ... up to HISTORY_LIMIT ] } }
+
+History is ACCUMULATED across runs: the source only exposes ~6 recent draws, so
+we merge each run's draws into the previously-published history (dedup by date,
+newest-first, trimmed). Roughly a month fills in within ~3 weeks; the first run
+already seeds 6 draws.
 
 Design rules (do NOT break):
   - Output JSON only — the fragile scrape lives HERE, never in the app.
   - Date is AD YYYY-MM-DD (the app does a strict string == compare).
-  - Freshness guard: never emit a draw older than MAX_STALE_DAYS as current.
+  - `draws.lao_pattana` stays exactly as before → old app versions keep working.
+    `history` is additive — old apps ignore it.
+  - Freshness guard: never promote a draw older than MAX_STALE_DAYS as "latest".
 """
 import json
+import os
 import re
 import ssl
 import sys
@@ -36,6 +46,7 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/148.0 Safari/537.36")
 TIMEOUT = 30
 MAX_STALE_DAYS = 4  # Lao draws Mon–Fri; a long weekend can legitimately be ~3 days old
+HISTORY_LIMIT = 40  # ~1 month (Lao draws Mon–Fri ≈ 22/mo); keep a little extra
 URL = "https://www.sanook.com/news/laolotto/"
 OUT = "data/lao.json"
 
@@ -75,59 +86,115 @@ def _digits(s):
     return s if (isinstance(s, str) and s.isdigit()) else None
 
 
-def scrape():
-    data = _next_data(_fetch(URL))
-    apollo = data["props"]["serverState"]["apollo"]["data"]
-
-    node = apollo.get("$ROOT_QUERY.recentLaoLotto") or {}
-    pr = apollo.get("$ROOT_QUERY.recentLaoLotto.prizeResult") or {}
-
-    slug = node.get("dateSlug")
-    iso = _slug_to_ad_iso(slug)
+def _node_to_draw(apollo, node):
+    """Turn one LaoLotto node (+ its referenced prizeResult) into a draw dict,
+    or None if it's incomplete."""
+    if not node:
+        return None
+    iso = _slug_to_ad_iso(node.get("dateSlug"))
+    ref = (node.get("prizeResult") or {}).get("id")
+    pr = (apollo.get(ref) if ref else None) or {}
     num4 = _digits(pr.get("last4Prize"))
-    top3 = _digits(pr.get("last3Prize1")) or ""
-    top2 = _digits(pr.get("last3Prize2")) or ""
-    animal = pr.get("animalName") or None
-
     if not iso or not num4:
-        raise RuntimeError(f"incomplete recentLaoLotto: slug={slug} num4={pr.get('last4Prize')!r}")
-
-    # Freshness guard: reject a draw that's too old to be "current".
-    today = datetime.now(timezone(timedelta(hours=7))).date()  # ICT
-    draw_day = datetime.strptime(iso, "%Y-%m-%d").date()
-    age = (today - draw_day).days
-    if age > MAX_STALE_DAYS or age < 0:
-        raise RuntimeError(f"stale/foreign-dated draw {iso} (age {age}d) — refusing to emit")
-
+        return None
     return {
-        "lao_pattana": {
-            "date": iso,
-            "num4": num4,
-            "top3": top3,
-            "top2": top2,
-            "animal": animal,
-            "verified": True,
-        }
+        "date": iso,
+        "num4": num4,
+        "top3": _digits(pr.get("last3Prize1")) or "",
+        "top2": _digits(pr.get("last3Prize2")) or "",
+        "animal": pr.get("animalName") or None,
+        "verified": True,
     }
+
+
+def scrape():
+    """Return draws newest-first (the latest + the laoLottoes list), deduped."""
+    apollo = _next_data(_fetch(URL))["props"]["serverState"]["apollo"]["data"]
+
+    nodes = []
+    recent = apollo.get("$ROOT_QUERY.recentLaoLotto")
+    if recent:
+        nodes.append(recent)
+    # laoLottoes is paginated — the arg string can vary ("first":6 today), so
+    # match any edges.N.node key rather than hard-coding the query args.
+    edge_keys = sorted(
+        k for k in apollo
+        if re.fullmatch(r'\$ROOT_QUERY\.laoLottoes\(.*\)\.edges\.\d+\.node', k)
+    )
+    nodes.extend(apollo[k] for k in edge_keys)
+
+    draws, seen = [], set()
+    for n in nodes:
+        d = _node_to_draw(apollo, n)
+        if d and d["date"] not in seen:
+            seen.add(d["date"])
+            draws.append(d)
+    if not draws:
+        raise RuntimeError("no complete Lao draws found in __NEXT_DATA__")
+    draws.sort(key=lambda d: d["date"], reverse=True)
+    return draws
+
+
+def _load_existing_history():
+    if not os.path.exists(OUT):
+        return []
+    try:
+        with open(OUT, encoding="utf-8") as f:
+            prev = json.load(f)
+        hist = (prev.get("history") or {}).get("lao_pattana") or []
+        # tolerate older JSON that only had draws.lao_pattana
+        if not hist:
+            latest = (prev.get("draws") or {}).get("lao_pattana")
+            if latest:
+                hist = [latest]
+        return [d for d in hist if d.get("date") and d.get("num4")]
+    except Exception as e:
+        print(f"[lao] could not read existing {OUT}: {e}", file=sys.stderr)
+        return []
+
+
+def _merge_history(fresh, existing):
+    """Newest-first, dedup by date (fresh wins), trimmed to HISTORY_LIMIT."""
+    by_date = {}
+    for d in existing:
+        by_date[d["date"]] = d
+    for d in fresh:  # fresh overwrites — re-scrapes may correct a value
+        by_date[d["date"]] = d
+    merged = sorted(by_date.values(), key=lambda d: d["date"], reverse=True)
+    return merged[:HISTORY_LIMIT]
 
 
 def main():
     try:
-        draws = scrape()
+        fresh = scrape()
     except Exception as e:
         print(f"[lao] scrape failed (non-fatal, keeping last JSON): {e}", file=sys.stderr)
         # Exit 0 so a transient miss doesn't fail the Action; we simply don't
         # overwrite the previously-good data/lao.json.
         sys.exit(0)
 
+    # Freshness guard on the LATEST draw only — history may legitimately be old.
+    today = datetime.now(timezone(timedelta(hours=7))).date()  # ICT
+    newest = datetime.strptime(fresh[0]["date"], "%Y-%m-%d").date()
+    age = (today - newest).days
+    if age > MAX_STALE_DAYS or age < 0:
+        print(f"[lao] newest draw {fresh[0]['date']} too old/foreign (age {age}d) — "
+              f"keeping last JSON", file=sys.stderr)
+        sys.exit(0)
+
+    history = _merge_history(fresh, _load_existing_history())
+    latest = history[0]
+
     out = {
         "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "draws": draws,
+        "draws": {"lao_pattana": latest},
+        "history": {"lao_pattana": history},
     }
+    os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)
-    d = draws["lao_pattana"]
-    print(f"[lao] {d['date']} num4={d['num4']} animal={d['animal']}")
+    print(f"[lao] latest {latest['date']} num4={latest['num4']} animal={latest['animal']} "
+          f"· history={len(history)} draws")
 
 
 if __name__ == "__main__":
