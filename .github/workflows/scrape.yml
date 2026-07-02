@@ -2,10 +2,12 @@ name: Scrape Lao Pattana results
 
 on:
   schedule:
-    # หวยลาวพัฒนา draws Mon–Fri ~20:30 ICT (UTC+7). 13:30 UTC = 20:30 Thai;
-    # 15:00 UTC lag run as a safety net.
-    - cron: "30 13 * * 1-5"
-    - cron: "0 15 * * 1-5"
+    # หวยลาวพัฒนา draws Mon–Fri ~20:30 ICT (UTC+7) = 13:30 UTC.
+    # GitHub delays scheduled jobs by up to ~1–2h (and may drop some under load),
+    # so instead of 2 fixed shots we sweep every 30 min for ~3.5h after the draw.
+    # The scraper is idempotent — once the day's result lands, later runs just
+    # print "No change", so the extra runs are free insurance against delays.
+    - cron: "*/30 13-16 * * 1-5"
   workflow_dispatch: {}
 
 permissions:
@@ -18,6 +20,7 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,8 +37,21 @@ jobs:
           if [ -n "$(git status --porcelain data/lao.json)" ]; then
             git add data/lao.json
             git commit -m "data: lao results $(date -u +%Y-%m-%dT%H:%MZ)"
-            git pull --rebase --autostash origin main
-            git push
+            # Retry rebase+push: concurrent/queued runs can race on main.
+            for attempt in 1 2 3 4; do
+              git pull --rebase --autostash origin main \
+                && git push && break
+              echo "push attempt $attempt failed; retrying in $((attempt*2))s…"
+              sleep $((attempt*2))
+            done
           else
             echo "No change."
           fi
+
+      # Runs even if earlier steps failed: turns the Action red + emails the
+      # owner ONLY when published data has gone stale beyond MAX_STALE_DAYS,
+      # i.e. the scraper has been silently failing for days. Single-run blips
+      # (which exit 0 by design) stay quiet.
+      - name: Alert if published data is stale
+        if: always()
+        run: python scrape.py --health-check
