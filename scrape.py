@@ -33,6 +33,7 @@ import os
 import re
 import ssl
 import sys
+import time
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
@@ -45,6 +46,8 @@ except Exception:
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/148.0 Safari/537.36")
 TIMEOUT = 30
+FETCH_RETRIES = 3        # transient network/CDN blips shouldn't cost us a whole run
+RETRY_BACKOFF = 4        # seconds; grows 4s, 8s, 12s between attempts
 MAX_STALE_DAYS = 4  # Lao draws Mon–Fri; a long weekend can legitimately be ~3 days old
 HISTORY_LIMIT = 40  # ~1 month (Lao draws Mon–Fri ≈ 22/mo); keep a little extra
 URL = "https://www.sanook.com/news/laolotto/"
@@ -57,8 +60,18 @@ def _fetch(url):
         "Accept": "text/html,application/xhtml+xml",
         "Accept-Language": "th,en;q=0.8",
     })
-    with urllib.request.urlopen(req, timeout=TIMEOUT, context=_SSL_CTX) as r:
-        return r.read().decode("utf-8", "ignore")
+    last = None
+    for attempt in range(1, FETCH_RETRIES + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT, context=_SSL_CTX) as r:
+                return r.read().decode("utf-8", "ignore")
+        except Exception as e:  # network/TLS/HTTP blip — back off and retry
+            last = e
+            if attempt < FETCH_RETRIES:
+                print(f"[lao] fetch attempt {attempt} failed ({e}); retrying…",
+                      file=sys.stderr)
+                time.sleep(RETRY_BACKOFF * attempt)
+    raise last
 
 
 def _next_data(html):
@@ -164,6 +177,41 @@ def _merge_history(fresh, existing):
     return merged[:HISTORY_LIMIT]
 
 
+def health_check():
+    """Alarm mode: exit non-zero if the *published* latest draw is stale.
+
+    The scraper deliberately exits 0 on a single failed run (a transient miss
+    shouldn't paint the Action red when it fires ~8×/day). The downside is that
+    a *real* breakage — Sanook changing their JSON, blocking the UA — would keep
+    the Action green while data silently rots. This step closes that gap: it
+    reads what we actually published and fails the job (→ GitHub emails the
+    owner) only once data has been stale beyond MAX_STALE_DAYS, i.e. many runs
+    have missed in a row. One-day blips stay quiet; genuine outages get loud.
+    """
+    if not os.path.exists(OUT):
+        print(f"[lao] health: {OUT} is missing", file=sys.stderr)
+        sys.exit(1)
+    try:
+        with open(OUT, encoding="utf-8") as f:
+            latest = (json.load(f).get("draws") or {}).get("lao_pattana") or {}
+    except Exception as e:
+        print(f"[lao] health: cannot read {OUT}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    date = latest.get("date")
+    if not date:
+        print("[lao] health: no latest draw in published JSON", file=sys.stderr)
+        sys.exit(1)
+
+    today = datetime.now(timezone(timedelta(hours=7))).date()  # ICT
+    age = (today - datetime.strptime(date, "%Y-%m-%d").date()).days
+    if age > MAX_STALE_DAYS:
+        print(f"[lao] health: FAIL — latest published draw {date} is {age}d old "
+              f"(> {MAX_STALE_DAYS}); the scraper is likely broken.", file=sys.stderr)
+        sys.exit(1)
+    print(f"[lao] health: OK — latest published draw {date} ({age}d old)")
+
+
 def main():
     try:
         fresh = scrape()
@@ -198,4 +246,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "--health-check" in sys.argv:
+        health_check()
+    else:
+        main()
