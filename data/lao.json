@@ -1,17 +1,25 @@
 {
- "generatedAt": "2026-07-10T17:21:36Z",
+ "generatedAt": "2026-07-13T15:40:45Z",
  "draws": {
   "lao_pattana": {
-   "date": "2026-07-10",
-   "num4": "0277",
-   "top3": "277",
-   "top2": "77",
-   "animal": "ตัวนิ่ม",
+   "date": "2026-07-13",
+   "num4": "2866",
+   "top3": "866",
+   "top2": "66",
+   "animal": "นาค",
    "verified": true
   }
  },
  "history": {
   "lao_pattana": [
+   {
+    "date": "2026-07-13",
+    "num4": "2866",
+    "top3": "866",
+    "top2": "66",
+    "animal": "นาค",
+    "verified": true
+   },
    {
     "date": "2026-07-10",
     "num4": "0277",
