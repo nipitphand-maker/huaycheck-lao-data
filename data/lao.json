@@ -1,17 +1,25 @@
 {
- "generatedAt": "2026-11-12T20:37:46Z",
+ "generatedAt": "2026-11-13T20:18:30Z",
  "draws": {
   "lao_pattana": {
-   "date": "2026-11-12",
-   "num4": "9836",
-   "top3": "836",
-   "top2": "36",
-   "animal": "อีเห็น",
+   "date": "2026-11-13",
+   "num4": "0900",
+   "top3": "900",
+   "top2": "00",
+   "animal": "ตะขาบ",
    "verified": true
   }
  },
  "history": {
   "lao_pattana": [
+   {
+    "date": "2026-11-13",
+    "num4": "0900",
+    "top3": "900",
+    "top2": "00",
+    "animal": "ตะขาบ",
+    "verified": true
+   },
    {
     "date": "2026-11-12",
     "num4": "9836",
@@ -322,14 +330,6 @@
     "top3": "225",
     "top2": "25",
     "animal": "เหยี่ยว",
-    "verified": true
-   },
-   {
-    "date": "2026-09-18",
-    "num4": "3502",
-    "top3": "502",
-    "top2": "02",
-    "animal": "หอย",
     "verified": true
    }
   ]
